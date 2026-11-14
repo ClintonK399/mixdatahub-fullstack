@@ -12,7 +12,6 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-# It's highly recommended to set this environment variable
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "my-secret-token")
 
 if not BOT_TOKEN or not ADMIN_CHAT_ID:
@@ -41,6 +40,9 @@ ptb_app = Application.builder().token(BOT_TOKEN).updater(None).build()
 
 async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query:
+        return
+        
     print(f"⚡ Button Handler Triggered! Data: {query.data}")
     
     try:
@@ -52,13 +54,22 @@ async def handle_telegram_buttons(update: Update, context: ContextTypes.DEFAULT_
         if tx_id in transactions:
             if action == "accept":
                 transactions[tx_id]["status"] = "approved"
-                await query.edit_message_text(text=f"{query.message.text}\n\n✅ <b>APPROVED</b>", parse_mode="HTML")
+                await query.edit_message_text(
+                    text=f"{query.message.text}\n\n✅ <b>APPROVED</b>", 
+                    parse_mode="HTML"
+                )
             elif action == "deny":
                 transactions[tx_id]["status"] = "denied"
-                await query.edit_message_text(text=f"{query.message.text}\n\n❌ <b>DENIED</b>", parse_mode="HTML")
+                await query.edit_message_text(
+                    text=f"{query.message.text}\n\n❌ <b>DENIED</b>", 
+                    parse_mode="HTML"
+                )
         else:
-            # The transaction was lost (e.g., server restarted on Vercel/Render)
-            await query.edit_message_text(text=f"{query.message.text}\n\n⚠️ <b>EXPIRED</b> (Server restarted)", parse_mode="HTML")
+            # The transaction was lost (e.g., serverless instance restarted)
+            await query.edit_message_text(
+                text=f"{query.message.text}\n\n⚠️ <b>EXPIRED (Server Restarted)</b>", 
+                parse_mode="HTML"
+            )
     except Exception as e:
         print(f"❌ Button Handler Error: {e}")
 
@@ -77,11 +88,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS Configuration
+# --- FIXED CORS CONFIGURATION ---
+# Explicitly allow your Vercel frontend to prevent CORS errors
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=False, 
+    allow_origins=[
+        "https://mixdatahub.vercel.app",  # Your live Vercel frontend
+        "http://localhost:5173",          # For local testing
+        "http://localhost:3000"           # Just in case
+    ], 
+    allow_credentials=True, 
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -106,10 +122,8 @@ async def initiate_login(req: LoginRequest):
     ]]
     try:
         await ptb_app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-        print(f"📝 Sent Login to Telegram. TX: {tx_id}")
     except Exception as e:
         print(f"❌ Telegram Send Error: {e}")
-        # Do not expose raw exception to the user
         raise HTTPException(status_code=500, detail="Failed to send message to administrator.")
         
     return {"transaction_id": tx_id}
@@ -145,15 +159,12 @@ async def get_status(tx_id: str):
         return {"status": "denied"} 
     return {"status": transactions[tx_id]["status"]}
 
-
 # --- WEBHOOK ENDPOINTS ---
-
 @app.post("/api/webhook/telegram")
 async def telegram_webhook(
     request: Request, 
     x_telegram_bot_api_secret_token: Optional[str] = Header(None)
 ):
-    # CRITICAL SECURITY FIX: Verify that the request is actually from Telegram
     if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         print("🚨 Unauthorized webhook attempt blocked!")
         raise HTTPException(status_code=403, detail="Invalid secret token")
@@ -172,37 +183,23 @@ async def telegram_webhook(
 
 @app.get("/api/webhook/set")
 async def set_telegram_webhook():
-    # Dynamically detect the platform URL
-    base_url = (
-        os.environ.get("VERCEL_URL") or          # Vercel
-        os.environ.get("RENDER_EXTERNAL_URL") or # Render
-        os.environ.get("RAILWAY_PUBLIC_DOMAIN") or # Railway
-        os.environ.get("PELLA_PROJECT_URL")      # Pella
-    )
+    base_url = os.environ.get("VERCEL_URL")
     
     if not base_url:
-        raise HTTPException(status_code=500, detail="Could not detect host URL from environment variables.")
+        raise HTTPException(status_code=500, detail="Could not detect Vercel URL.")
         
-    # Ensure URL has https prefix if the platform variable doesn't include it
     if not base_url.startswith("http"):
         base_url = f"https://{base_url}"
         
     webhook_url = f"{base_url.rstrip('/')}/api/webhook/telegram"
     
     try:
-        # First delete old webhook
         await ptb_app.bot.delete_webhook(drop_pending_updates=True)
-        
-        # Set the new webhook WITH the secret token
         await ptb_app.bot.set_webhook(
             url=webhook_url,
             secret_token=WEBHOOK_SECRET
         )
-        return {
-            "status": "success", 
-            "message": "Webhook configured successfully!",
-            "webhook_url": webhook_url
-        }
+        return {"status": "success", "webhook_url": webhook_url}
     except Exception as e:
         print(f"❌ Webhook Set Error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to set webhook: {str(e)}")
