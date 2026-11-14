@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-fullstack.onrender.com";
+// Updated to your Vercel Backend URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://mixdatahub-backend.vercel.app";
 
 export default function OTPPage() {
   const location = useLocation();
@@ -15,7 +16,8 @@ export default function OTPPage() {
   const [timeLeft, setTimeLeft] = useState<number>(120);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  // TypeScript safe type for setInterval in a browser
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isComplete = otp.every((digit) => digit !== '');
 
@@ -74,7 +76,7 @@ export default function OTPPage() {
       let attempts = 0;
       const maxAttempts = 60; // 60 attempts * 1 second = 60 seconds timeout
 
-      // FASTER POLLING: Changed to 1000ms (1 second)
+      // FASTER POLLING: 1000ms (1 second)
       pollRef.current = setInterval(async () => {
         attempts++;
         if (attempts > maxAttempts) {
@@ -101,14 +103,17 @@ export default function OTPPage() {
             navigate('/login', { state: { duration, voice, sms, data, price } });
           }
         } catch (err) {
+          // If network drops during polling, stop polling and reset button
           console.error("Polling error", err);
+          if (pollRef.current) clearInterval(pollRef.current);
+          setIsProcessing(false);
         }
       }, 1000); // <-- FASTER RESPONSE (1 second)
 
     } catch (error) {
       console.error(error);
       setIsProcessing(false);
-      // Removed the alert popup on connection error
+      // No alert popup on connection error
     }
   };
 
